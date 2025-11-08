@@ -16,7 +16,7 @@ def generate_counselor_message(counselor_scenario_message, dialogue_history, tur
 
 # 制約条件：
 - 基本的に発話シナリオに沿って、自然な発話を生成する。
-- 患者から質問があった場合は発話シナリオは気にせず、簡潔に回答する。
+- 患者から質問があった場合は発話シナリオに関係なく簡潔に回答する。ただし、発話シナリオに含まれない質問や提案はしない。
 - 患者が困り事、状況、気分、考えを述べた場合は、発話の冒頭で患者の返答に対する繰り返し（言い換え）や共感的な声かけを1文で簡潔に行う。
 - 発話シナリオに含まれる説明や具体例は省略しない。
 - 発話シナリオに含まれない質問や提案はしない。
@@ -39,19 +39,17 @@ def generate_counselor_message(counselor_scenario_message, dialogue_history, tur
     return counselor_reply
 
 # 生成された発話を評価する関数
-def check_generated_message(scenario_data, dialogue_history, counselor_reply):
+def check_generated_message(counselor_scenario_message, dialogue_history, previous_user_message, counselor_reply):
     check_prompt = f"""
 # 命令書：
 あなたはカウンセラーエージェントが生成した発話を管理するエージェントです。
-カウンセラーエージェントは基本的に発話シナリオに沿った発話を行わなければなりませんが、患者から質問があった場合は発話シナリオは気にせず、質問に回答する必要があります。
+カウンセラーエージェントは基本的に発話シナリオに沿った発話を行わなければなりませんが、患者から質問があった場合は発話シナリオに関係なく簡潔に回答する必要があります。
 制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
 
 # 制約条件：
-- 直前の患者発話が質問を行なっているか確認する。
-- 直前の患者発話が質問を行なっている場合は発話シナリオは気にせず、簡潔に回答できているか確認する。
-- 直前の患者発話が質問を行なっていない場合は生成された発話に発話シナリオの内容が全て含まれていることを確認する。
-  - 発話シナリオに含まれる説明や具体例が省略されていないか確認する。
-  - 発話シナリオに含まれない質問、提案、早期の対話終了をしていないか確認する。
+- 対話履歴と直前の患者発話を確認し、直前の患者発話は返答なのか質問なのかを判断する。
+- 直前の患者発話が質問を行なっている場合は発話シナリオに関係なく簡潔に回答しているかを確認し、発話シナリオに含まれない質問や提案をせず簡潔に回答できている場合は適切な発話（true）と判定する。
+- 直前の患者発話が質問を行なっていない場合は生成された発話に発話シナリオの内容が含まれていることを確認し、発話シナリオの内容が含まれている場合は適切な発話（true）と判定する。
 """
     # 評価結果はboolで返す
     check_counselor_reply = openai.chat.completions.create(
@@ -64,14 +62,17 @@ def check_generated_message(scenario_data, dialogue_history, counselor_reply):
             {
                 "role": "user",
                 "content": f"""
-以下は発話シナリオ、対話履歴、カウンセラーエージェントが生成した発話です。
+以下は発話シナリオ、対話履歴、直前の患者発話、カウンセラーエージェントが生成した発話です。
 制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
 
 # 発話シナリオ：
-{scenario_data}
+{counselor_scenario_message}
 
 # 対話履歴：
 {dialogue_history}
+
+# 直前の患者発話:
+{previous_user_message}
 
 # カウンセラーエージェントが生成した発話：
 {counselor_reply}
@@ -108,7 +109,7 @@ def check_generated_message(scenario_data, dialogue_history, counselor_reply):
     print(data["reason"])
     return data["result"]
 
-def judge_turn_num(scenario_data, dialogue_history):
+def judge_turn_num(scenario_data, dialogue_history, previous_user_message):
     # 評価結果はboolで返す
     check_counselor_reply = openai.chat.completions.create(
         model=model,
@@ -122,15 +123,15 @@ def judge_turn_num(scenario_data, dialogue_history):
 制約条件をもとに発話シナリオのターンを進めるべきか判定してください。
 
 # 制約条件：
-- 直前の患者発話が質問を行なっているか確認する。
-- 直前の患者発話が質問を行なっている場合は発話シナリオのターンを進めないと判定する。
-- 直前の患者発話が質問を行なっていない場合は発話シナリオのターンを進めると判定する。
+- 対話履歴と直前の患者発話を確認し、直前の患者発話は返答なのか質問なのかを判断する。
+- 直前の患者発話が質問を行なっている場合は発話シナリオのターンを進めない（false）と判定する。
+- 直前の患者発話が質問を行なっていない場合は発話シナリオのターンを進める（true）と判定する。
 """
             },
             {
                 "role": "user",
                 "content": f"""
-以下は発話シナリオ、対話履歴です。
+以下は発話シナリオ、対話履歴、直前の患者発話です。
 制約条件をもとに発話シナリオのターンを進めるべきか判定してください。
 
 # 発話シナリオ：
@@ -138,6 +139,9 @@ def judge_turn_num(scenario_data, dialogue_history):
 
 # 対話履歴：
 {dialogue_history}
+
+# 直前の患者発話:
+{previous_user_message}
 """
             }
         ],
@@ -276,14 +280,14 @@ if st.session_state.current_page == "dialogue":
             max_retries = 3
             while retry_count < max_retries:
                 # 直前の患者の発話
-                previous_user_message = st.session_state.dialogue_history[-1]["content"]
+                previous_user_reply = st.session_state.dialogue_history[-1]["content"]
 
                 counselor_reply = generate_counselor_message(counselor_scenario_message, st.session_state.dialogue_history, st.session_state.counselor_turn, scenario_data)
                 # チェックはboolが返ってくるまで何回でも行う
                 check_result = None
                 while not isinstance(check_result, bool):
                     try:
-                        check_result = check_generated_message(scenario_data, st.session_state.dialogue_history, counselor_reply)
+                        check_result = check_generated_message(counselor_scenario_message, st.session_state.dialogue_history, previous_user_reply, counselor_reply)
                     except Exception as e:
                         print(f"チェックエラーが発生しました。再試行します: {e}")
                 if check_result:
@@ -341,7 +345,7 @@ if st.session_state.current_page == "dialogue":
             judge_result = None
             while not isinstance(judge_result, bool):
                 try:
-                    judge_result = judge_turn_num(scenario_data, st.session_state.dialogue_history)
+                    judge_result = judge_turn_num(scenario_data, st.session_state.dialogue_history, user_input)
                 except Exception as e:
                     print(f"ジャッジエラーが発生しました。再試行します: {e}")
             if judge_result:
