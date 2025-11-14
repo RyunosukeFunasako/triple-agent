@@ -16,8 +16,8 @@ def generate_counselor_message(counselor_scenario_message, dialogue_history, tur
 
 # 制約条件：
 - 基本的に発話シナリオに沿って、自然な発話を生成する。
-- 患者から質問があった場合は発話シナリオに関係なく簡潔に回答する。ただし、発話シナリオに含まれない質問や提案はしない。
-- 患者が困り事、状況、気分、考えを述べた場合は、発話の冒頭で患者の返答に対する繰り返し（言い換え）や共感的な声かけを1文で簡潔に行う。
+- 患者から質問があった場合は発話シナリオに関係なく簡潔に回答する。回答の最後には、自然な形で確認の問いを1文で簡潔に行う。
+- 必要に応じて、発話の冒頭で患者の返答に対する繰り返し（言い換え）や共感的な声かけを1文で簡潔に行う。
 - 発話シナリオに含まれる説明や具体例は省略しない。
 - 発話シナリオに含まれない質問や提案はしない。
 - 指示的な発話や断定的な発話はしない。
@@ -39,7 +39,7 @@ def generate_counselor_message(counselor_scenario_message, dialogue_history, tur
     return counselor_reply
 
 # 生成された発話を評価する関数
-def check_generated_message(counselor_scenario_message, dialogue_history, previous_user_message, counselor_reply):
+def check_generated_message(counselor_scenario_message, dialogue_history, previous_counselor_message, previous_user_message, counselor_reply):
     check_prompt = f"""
 # 命令書：
 あなたはカウンセラーエージェントが生成した発話を管理するエージェントです。
@@ -47,9 +47,9 @@ def check_generated_message(counselor_scenario_message, dialogue_history, previo
 制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
 
 # 制約条件：
-- 対話履歴と直前の患者発話を確認し、直前の患者発話は返答なのか質問なのかを判断する。
-- 直前の患者発話が質問を行なっている場合は発話シナリオに関係なく簡潔に回答しているかを確認し、発話シナリオに含まれない質問や提案をせず簡潔に回答できている場合は適切な発話（true）と判定する。
-- 直前の患者発話が質問を行なっていない場合は生成された発話に発話シナリオの内容が含まれていることを確認し、発話シナリオの内容が含まれている場合は適切な発話（true）と判定する。
+- 対話履歴、直前のカウンセラーエージェント発話、直前の患者発話を確認し、直前の患者発話は質問なのか判断する。
+- 直前の患者発話が質問を行なっている場合は発話シナリオに関係なく簡潔に回答しているか確認し、簡潔に回答できている場合は適切な発話（true）と判定する。
+- 直前の患者発話が質問を行なっていない場合は生成された発話に発話シナリオの内容が全て含まれているか確認し、全て含まれている場合は適切な発話（true）と判定する。発話シナリオに存在しない質問が含まれている場合は不適切な発話（false）と判定する。
 """
     # 評価結果はboolで返す
     check_counselor_reply = openai.chat.completions.create(
@@ -62,7 +62,7 @@ def check_generated_message(counselor_scenario_message, dialogue_history, previo
             {
                 "role": "user",
                 "content": f"""
-以下は発話シナリオ、対話履歴、直前の患者発話、カウンセラーエージェントが生成した発話です。
+以下は発話シナリオ、対話履歴、直前のカウンセラーエージェント発話、直前の患者発話、カウンセラーエージェントが生成した発話です。
 制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
 
 # 発話シナリオ：
@@ -70,6 +70,9 @@ def check_generated_message(counselor_scenario_message, dialogue_history, previo
 
 # 対話履歴：
 {dialogue_history}
+
+# 直前のカウンセラーエージェント発話:
+{previous_counselor_message}
 
 # 直前の患者発話:
 {previous_user_message}
@@ -109,7 +112,7 @@ def check_generated_message(counselor_scenario_message, dialogue_history, previo
     print(data["reason"])
     return data["result"]
 
-def judge_turn_num(scenario_data, dialogue_history, previous_user_message):
+def judge_turn_num(scenario_data, dialogue_history, previous_counselor_message,previous_user_message):
     # 評価結果はboolで返す
     check_counselor_reply = openai.chat.completions.create(
         model=model,
@@ -119,11 +122,11 @@ def judge_turn_num(scenario_data, dialogue_history, previous_user_message):
                 "content": f"""
 # 命令書：
 あなたはカウンセリングにおける発話シナリオのターンを進めるべきか判定するエージェントです。
-カウンセラーエージェントは基本的に発話シナリオに沿った発話を行わなければなりませんが、患者から質問があった場合は発話シナリオは気にせず、質問に回答する必要があります。
+カウンセラーエージェントは基本的に発話シナリオに沿った発話を行わなければなりませんが、患者から質問があった場合は発話シナリオに関係なく簡潔に回答する必要があります。
 制約条件をもとに発話シナリオのターンを進めるべきか判定してください。
 
 # 制約条件：
-- 対話履歴と直前の患者発話を確認し、直前の患者発話は返答なのか質問なのかを判断する。
+- 対話履歴、直前のカウンセラーエージェント発話、直前の患者発話を確認し、直前の患者発話は質問なのか判断する。
 - 直前の患者発話が質問を行なっている場合は発話シナリオのターンを進めない（false）と判定する。
 - 直前の患者発話が質問を行なっていない場合は発話シナリオのターンを進める（true）と判定する。
 """
@@ -139,6 +142,9 @@ def judge_turn_num(scenario_data, dialogue_history, previous_user_message):
 
 # 対話履歴：
 {dialogue_history}
+
+# 直前のカウンセラーエージェント発話:
+{previous_counselor_message}
 
 # 直前の患者発話:
 {previous_user_message}
@@ -174,60 +180,6 @@ def judge_turn_num(scenario_data, dialogue_history, previous_user_message):
     print(f"ターンを進めるか: {data["result"]}評価の理由")
     print(data["reason"])
     return data["result"]
-
-# def judge_turn_num(scenario_data, dialogue_history):
-#     # 評価結果はintで返す
-#     check_counselor_reply = openai.chat.completions.create(
-#         model=model,
-#         messages=[
-#             {
-#                 "role": "system",
-#                 "content": f"""
-# あなたはカウンセリングが発話シナリオの何ターン目まで終えているかを判定するエージェントです。
-# 発話シナリオはカウンセラーが話す予定の内容です。
-# 発話シナリオと対話履歴をもとに、何ターン目の発話シナリオに対する対話まで終えているかを判定してください。
-# 患者から質問があったり、患者がカウンセラーの発話を理解できていない場合は、その発話シナリオはまだ終えていないと判定してください。
-# """
-#             },
-#             {
-#                 "role": "user",
-#                 "content": f"""
-# 以下は発話シナリオ、対話履歴です。
-# カウンセリングが発話シナリオの何ターン目まで終えているかを判定してください。
-
-# # 発話シナリオ：
-# {scenario_data}
-
-# # 対話履歴：
-# {dialogue_history}
-# """
-#             }
-#         ],
-#         tools=[
-#             {
-#                 "type": "function",
-#                 "function": {
-#                     "name": "judge_turn_num",
-#                     "description": "カウンセリングが発話シナリオの何ターン目まで終えているかを判定する",
-#                     "parameters": {
-#                         "type": "object",
-#                         "properties": {
-#                             "result": {"type": "integer", "minimum": 1, "maximum": 21,  "description": "カウンセリングが発話シナリオの何ターン目まで終えているかを判定する"},
-#                         }
-#                     },
-#                     "required": [
-#                         "result",
-#                     ],
-#                     "additionalProperties": False
-#                 },
-#                 "strict": True
-#             }
-#         ],
-#         tool_choice="required"
-#     )
-#     result = check_counselor_reply.choices[0].message.tool_calls[0].function.arguments
-#     data = json.loads(result)
-#     return data["result"]
 
 # ストリーム表示を行う関数
 def stream_counselor_reply(counselor_reply):
@@ -279,6 +231,8 @@ if st.session_state.current_page == "dialogue":
             retry_count = 0
             max_retries = 3
             while retry_count < max_retries:
+                # 直前のカウンセラーエージェントの発話
+                previous_counselor_message = st.session_state.dialogue_history[-2]["content"]
                 # 直前の患者の発話
                 previous_user_reply = st.session_state.dialogue_history[-1]["content"]
 
@@ -287,7 +241,7 @@ if st.session_state.current_page == "dialogue":
                 check_result = None
                 while not isinstance(check_result, bool):
                     try:
-                        check_result = check_generated_message(counselor_scenario_message, st.session_state.dialogue_history, previous_user_reply, counselor_reply)
+                        check_result = check_generated_message(counselor_scenario_message, st.session_state.dialogue_history, previous_counselor_message, previous_user_reply, counselor_reply)
                     except Exception as e:
                         print(f"チェックエラーが発生しました。再試行します: {e}")
                 if check_result:
@@ -333,19 +287,16 @@ if st.session_state.current_page == "dialogue":
             st.session_state.dialogue_history.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
-            # judge_result = judge_turn_num(scenario_data, st.session_state.dialogue_history)
-            # if judge_result:
-            #     st.session_state.counselor_turn += 1
-            #     print("ターンを進める")
-            #     print(st.session_state.counselor_turn + 1)
-            # else:
-            #     print("ターンを進めない")
-            #     print(st.session_state.counselor_turn)
+
+            # 直前のカウンセラーエージェントの発話
+            previous_counselor_message = st.session_state.dialogue_history[-2]["content"]
+            # 直前の患者の発話
+            previous_user_reply = st.session_state.dialogue_history[-1]["content"]
 
             judge_result = None
             while not isinstance(judge_result, bool):
                 try:
-                    judge_result = judge_turn_num(scenario_data, st.session_state.dialogue_history, user_input)
+                    judge_result = judge_turn_num(scenario_data, st.session_state.dialogue_history, previous_counselor_message, previous_user_reply)
                 except Exception as e:
                     print(f"ジャッジエラーが発生しました。再試行します: {e}")
             if judge_result:
@@ -367,6 +318,12 @@ if st.session_state.current_page == "dialogue":
     #     if st.button("「認知の変化の回答」に進む"):
     #         # st.session_state.current_page = "cc_immediate"
     #         st.rerun()
+    if st.session_state.counselor_turn + 1 == len(scenario_data):
+        time.sleep(1)
+        st.success("これで対話セッションは終了です。")
+        if st.button("「認知の変化の回答」に進む"):
+            # st.session_state.current_page = "cc_immediate"
+            st.rerun()
 
 else:
     st.session_state.current_page = "description"
