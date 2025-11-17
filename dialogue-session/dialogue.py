@@ -8,16 +8,20 @@ model = "gpt-4o-mini"
 scenario_file = "dialogue-session/counselor_scenario.json"
 
 # カウンセラーエージェントの発話生成関数
-def generate_counselor_message(counselor_scenario_message, dialogue_history, turn, scenario_data):
-    counselor_message_prompt = f"""
+def generate_counselor_message(should_advance_turn, turn, scenario_data, counselor_scenario_message, dialogue_history):
+    # 質問でない場合（ターンを進める場合）
+    if should_advance_turn:
+        counselor_message_prompt = f"""
 # 命令書：
 あなたは優秀なカウンセラーエージェントです。
-以下の制約条件と発話シナリオ、対話履歴をもとに発話を生成してください。
+以下の制約条件と発話シナリオをもとに発話を生成してください。
 
 # 制約条件：
-- 直前の患者発話が質問でない場合は発話シナリオに沿って発話を生成する。発話シナリオに含まれる説明や具体例は省略しない。発話シナリオに含まれない質問や提案はしない。
-- 直前の患者発話が質問である場合は発話シナリオに関係なく簡潔に回答する。最後には回答に満足できたか、確認の問いを1文で簡潔に行う。
+- 発話シナリオに沿って発話を生成する。
 - 必要に応じて、発話の冒頭で患者の返答に対する繰り返し（言い換え）や共感的な声かけを1文で簡潔に行う。
+- 各ターンの発話シナリオの内容は生成する発話に必ず含める。
+- 発話シナリオに含まれる説明や具体例は省略しない。
+- 発話シナリオに含まれない説明や質問、提案はしない。
 - 指示的な発話や断定的な発話はしない。
 
 # 今回のターン{turn+1}の発話シナリオ：
@@ -25,6 +29,18 @@ def generate_counselor_message(counselor_scenario_message, dialogue_history, tur
 
 # 発話シナリオ一覧：
 {json.dumps(scenario_data, ensure_ascii=False, indent=2)}
+"""
+    # 質問である場合（ターンを進めない場合）
+    else:
+        counselor_message_prompt = f"""
+# 命令書:
+あなたは優秀なカウンセラーエージェントです。
+以下の制約条件をもとに発話を生成してください。
+
+# 制約条件：
+- 患者の質問に簡潔に回答する。最後には回答に満足できたか、確認の問いを1文で簡潔に行う。
+- 必要に応じて、発話の冒頭で患者の返答に対する繰り返し（言い換え）や共感的な声かけを1文で簡潔に行う。
+- 指示的な発話や断定的な発話はしない。
 """
     # カウンセラーのメッセージリストを更新（対話履歴を更新）
     messages_for_counselor = [{"role": "system", "content": counselor_message_prompt}] + dialogue_history
@@ -37,11 +53,35 @@ def generate_counselor_message(counselor_scenario_message, dialogue_history, tur
     return counselor_reply
 
 # 生成された発話を評価する関数
-def check_generated_message(counselor_scenario_message, dialogue_history, previous_counselor_message, previous_user_message, counselor_reply):
-    check_prompt = f"""
+def check_generated_message(should_advance_turn, counselor_scenario_message, previous_user_message, counselor_reply):
+    # 質問でない場合（ターンを進める場合）
+    if should_advance_turn:
+        check_prompt = f"""
 # 命令書：
 あなたはカウンセラーエージェントが生成した発話を評価するエージェントです。
 制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
+
+# 制約条件：
+- カウンセラーエージェントが生成した発話を確認する。
+- 発話シナリオの内容が全て含まれている場合はtrueと判定する。
+- 発話シナリオの内容が全て含まれていない場合はfalseと判定する。
+
+# 発話シナリオ：
+{counselor_scenario_message}
+"""
+    else:
+        check_prompt = f"""
+# 命令書：
+あなたはカウンセラーエージェントが生成した発話を評価するエージェントです。
+制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
+
+# 制約条件：
+- カウンセラーエージェントが生成した発話を確認する。
+- 患者の質問に簡潔に回答し、最後には確認の問いが含まれている場合はtrueと判定する。
+- 患者の質問に簡潔に回答できていない、もしくは最後に確認の問いが含まれていない場合はfalseと判定する。
+
+# 患者の質問:
+{previous_user_message}
 """
     # 評価結果はboolで返す
     check_counselor_reply = openai.chat.completions.create(
@@ -54,25 +94,8 @@ def check_generated_message(counselor_scenario_message, dialogue_history, previo
             {
                 "role": "user",
                 "content": f"""
-以下は発話シナリオ、対話履歴、直前のカウンセラーエージェント発話、直前の患者発話、カウンセラーエージェントが生成した発話です。
+以下はカウンセラーエージェントが生成した発話です。
 制約条件をもとにカウンセラーエージェントが生成した発話を評価してください。
-
-# 制約条件：
-- 対話履歴、直前のカウンセラーエージェント発話、直前の患者発話を確認し、直前の患者発話は質問なのか判断する。
-- 直前の患者発話が質問でない場合はカウンセラーエージェントが生成した発話を確認し、発話シナリオの内容が全て含まれている場合は **適切な発話（true）** と判定する。
-- 直前の患者発話が質問である場合はカウンセラーエージェントが生成した発話を確認し、発話シナリオに関係なく簡潔に回答している場合は **適切な発話（true）** と判定する。
-
-# 発話シナリオ：
-{counselor_scenario_message}
-
-# 対話履歴：
-{dialogue_history}
-
-# 直前のカウンセラーエージェント発話:
-{previous_counselor_message}
-
-# 直前の患者発話:
-{previous_user_message}
 
 # カウンセラーエージェントが生成した発話：
 {counselor_reply}
@@ -177,6 +200,10 @@ def stream_counselor_reply(counselor_reply):
         yield chunk
         time.sleep(0.02)
 
+# ターン調整用
+if "should_advance_turn" not in st.session_state:
+    st.session_state.should_advance_turn = True
+
 # 対話セッション
 if st.session_state.current_page == "dialogue":
     st.title("対話セッション")
@@ -206,8 +233,6 @@ if st.session_state.current_page == "dialogue":
 
     # 現在のターンのカウンセラーエージェントの発話を生成・表示
     if st.session_state.speaker == "counselor":
-        # まだ表示されていない発話のみをストリーミング表示する
-        # if len(st.session_state.messages_for_counselor) == st.session_state.counselor_turn:
         counselor_scenario_message = scenario_data[st.session_state.counselor_turn]["counselor_message"]
 
         # 1ターン目はシナリオ通りの発話を使用
@@ -226,12 +251,12 @@ if st.session_state.current_page == "dialogue":
                 # 直前の患者の発話
                 previous_user_reply = st.session_state.dialogue_history[-1]["content"]
 
-                counselor_reply = generate_counselor_message(counselor_scenario_message, st.session_state.dialogue_history, st.session_state.counselor_turn, scenario_data)
+                counselor_reply = generate_counselor_message(st.session_state.should_advance_turn, st.session_state.counselor_turn, scenario_data, counselor_scenario_message, st.session_state.dialogue_history)
                 # チェックはboolが返ってくるまで何回でも行う
                 check_result = None
                 while not isinstance(check_result, bool):
                     try:
-                        check_result = check_generated_message(counselor_scenario_message, st.session_state.dialogue_history, previous_counselor_message, previous_user_reply, counselor_reply)
+                        check_result = check_generated_message(st.session_state.should_advance_turn, counselor_scenario_message, previous_user_reply, counselor_reply)
                     except Exception as e:
                         print(f"チェックエラーが発生しました。再試行します: {e}")
                 if check_result:
@@ -261,11 +286,6 @@ if st.session_state.current_page == "dialogue":
 
         if st.session_state.counselor_turn < len(scenario_data) - 1:
             st.session_state.speaker = "client"
-        else:
-            time.sleep(1)
-            st.success("これで対話セッションは終了です。")
-            if st.button("「認知の変化の回答」に進む"):
-                st.rerun()
 
     # 被験者の入力（23ターン目は入力を求めない）
     if st.session_state.speaker == "client":
@@ -289,6 +309,8 @@ if st.session_state.current_page == "dialogue":
                     judge_result = judge_turn_num(previous_counselor_message, previous_user_reply)
                 except Exception as e:
                     print(f"ジャッジエラーが発生しました。再試行します: {e}")
+
+            st.session_state.should_advance_turn = judge_result
             if judge_result:
                 st.session_state.counselor_turn += 1
                 print("ターンを進める")
@@ -297,17 +319,10 @@ if st.session_state.current_page == "dialogue":
 
             print(f"現在のターン：{st.session_state.counselor_turn + 1}")
 
-            # st.session_state.counselor_turn += 1
             st.session_state.speaker = "counselor"
             st.rerun()
 
-    # # 23ターン終了
-    # if st.session_state.counselor_turn:
-    #     time.sleep(1)
-    #     st.success("これで対話セッションは終了です。")
-    #     if st.button("「認知の変化の回答」に進む"):
-    #         # st.session_state.current_page = "cc_immediate"
-    #         st.rerun()
+    # 21ターン終了
     if st.session_state.counselor_turn + 1 == len(scenario_data):
         time.sleep(1)
         st.success("これで対話セッションは終了です。")
